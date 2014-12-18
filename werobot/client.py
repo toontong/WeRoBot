@@ -1,12 +1,18 @@
 # -*- coding: utf-8 -*-
+'''
+异步更新access_token
+'''
 
 import time
-import requests
+import logging
+from threading import Timer
 
+import requests
 
 from requests.compat import json as _json
 from werobot.utils import to_text
 
+logger = logging.getLogger("werobot")
 
 class ClientException(Exception):
     pass
@@ -18,6 +24,7 @@ def check_error(json):
     如果返回码提示有错误，抛出一个 :class:`ClientException` 异常。否则返回 True 。
     """
     if "errcode" in json and json["errcode"] != 0:
+        logger.error(json)
         raise ClientException("{}: {}".format(json["errcode"], json["errmsg"]))
     return json
 
@@ -26,12 +33,15 @@ class Client(object):
     """
     微信 API 操作类
     通过这个类可以方便的通过微信 API 进行一系列操作，比如主动发送消息、创建自定义菜单等
+    requestTimeout: second of request to http://mp.weixin.qq.com
     """
-    def __init__(self, appid, appsecret):
+    def __init__(self, appid, appsecret, requestTimeout=5):
         self.appid = appid
         self.appsecret = appsecret
         self._token = None
         self.token_expires_at = None
+        self._session = requests.Session()
+        self._timeout = int(requestTimeout) # second
 
     def request(self, method, url, **kwargs):
         if "params" not in kwargs:
@@ -41,10 +51,12 @@ class Client(object):
             body = body.encode('utf8')
             kwargs["data"] = body
 
-        r = requests.request(
+        r = self._session.request(
             method=method,
             url=url,
-            **kwargs
+            timeout=self._timeout,
+            verify=False,
+            ** kwargs
         )
         r.raise_for_status()
         json = r.json()
@@ -81,15 +93,28 @@ class Client(object):
             }
         )
 
+    def _async_refresh_token(self, timer_interval):
+
+        def timer(self):
+            json = self.grant_token()
+            self._token = json["access_token"]
+            self.token_expires_at = int(time.time()) + json["expires_in"]
+            self._async_refresh_token(json["expires_in"])
+
+        t = Timer(timer_interval - 90, timer, self=self)
+        t.start()
+
     @property
     def token(self):
         if self._token:
             now = time.time()
             if self.token_expires_at - now > 60:
                 return self._token
+
         json = self.grant_token()
         self._token = json["access_token"]
         self.token_expires_at = int(time.time()) + json["expires_in"]
+        self._async_refresh_token(json["expires_in"])
         return self._token
 
     def create_menu(self, menu_data):
