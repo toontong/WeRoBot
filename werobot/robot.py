@@ -20,22 +20,27 @@ __all__ = ['BaseRoBot', 'WeRoBot']
 _DEFAULT_CONFIG = dict(
     SERVER="auto",
     HOST="127.0.0.1",
-    PORT="8888"
+    PORT="8888",
+    URL="/",
 )
 
 
 class BaseRoBot(object):
-    message_types = ['subscribe', 'unsubscribe', 'click',  'view',  # event
+    message_types = ['subscribe', 'unsubscribe', 'click', 'view', # event
                      'text', 'image', 'link', 'location', 'voice']
 
     token = ConfigAttribute("TOKEN")
     session_storage = ConfigAttribute("SESSION_STORAGE")
 
-    def __init__(self, token=None, logger=None, enable_session=True,
+    def __init__(self, token=None, logger=None,
+                 enable_session=True,
                  session_storage=None):
+
         self.config = Config(_DEFAULT_CONFIG)
+
         self._handlers = dict((k, []) for k in self.message_types)
         self._handlers['all'] = []
+
         if logger is None:
             import werobot.logger
             logger = werobot.logger.logger
@@ -46,10 +51,10 @@ class BaseRoBot(object):
             session_storage = FileStorage(
                 filename=os.path.abspath("werobot_session")
             )
+
         self.config.update(
             TOKEN=token,
             SESSION_STORAGE=session_storage,
-
         )
 
     def handler(self, f):
@@ -250,50 +255,50 @@ class WeRoBot(BaseRoBot):
     """ % werobot.__version__
 
     @property
-    def wsgi(self):
+    def app(self):
         if not self._handlers:
             raise
-        app = Bottle()
 
-        @app.get('<t:path>')
-        def echo(t):
-            if not self.check_signature(
-                request.query.timestamp,
-                request.query.nonce,
-                request.query.signature
-            ):
-                return abort(403)
-            return request.query.echostr
+        if hasattr(self, '_app'):
+            return self._app
 
-        @app.post('<t:path>')
-        def handle(t):
-            if not self.check_signature(
-                request.query.timestamp,
-                request.query.nonce,
-                request.query.signature
-            ):
-                return abort(403)
-
-            body = request.body.read()
-            message = parse_user_msg(body)
-            logging.info("Receive message %s" % message)
-            reply = self.get_reply(message)
-            if not reply:
-                self.logger.warning("No handler responded message %s"
-                                    % message)
-                return ''
-            response.content_type = 'application/xml'
-            return create_reply(reply, message=message)
-
+        self._app = app = Bottle()
         @app.error(403)
-        def error403(error):
+        def _error403(error):
             return template(self.ERROR_PAGE_TEMPLATE,
-                            e=error, request=request)
-
+                    e=error, request=request)
         return app
 
+    def _get_handle(self, path):
+        if not self.check_signature(
+            request.query.timestamp,
+            request.query.nonce,
+            request.query.signature
+        ):
+            return abort(403)
+        return request.query.echostr
+
+    def _post_handle(self, path):
+        if not self.check_signature(
+            request.query.timestamp,
+            request.query.nonce,
+            request.query.signature
+        ):
+            return abort(403)
+
+        body = request.body.read()
+        message = parse_user_msg(body)
+        logging.info("Receive message %s" % message)
+        reply = self.get_reply(message)
+        if not reply:
+            self.logger.warning("No handler responded message %s"
+                                % message)
+            return ''
+        response.content_type = 'application/xml'
+        return create_reply(reply, message=message)
+
     def run(self, server=None, host=None,
-            port=None, enable_pretty_logging=True):
+            port=None, url="/", enable_pretty_logging=True):
         if enable_pretty_logging:
             from werobot.logger import enable_pretty_logging
             enable_pretty_logging(self.logger)
@@ -303,4 +308,11 @@ class WeRoBot(BaseRoBot):
             host = self.config["HOST"]
         if port is None:
             port = self.config["PORT"]
-        self.wsgi.run(server=server, host=host, port=port)
+        if not url:
+            url = self.config["URL"]
+
+        self.app.get("%s<path:path>" % url, callback=self._get_handle)
+        self.app.post("%s<path:path>" % url, callback=self._post_handle)
+
+        self.app.run(server=server, host=host, port=port, reloader=True)
+

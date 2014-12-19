@@ -12,7 +12,6 @@ import requests
 from requests.compat import json as _json
 from werobot.utils import to_text
 
-logger = logging.getLogger("werobot")
 
 class ClientException(Exception):
     pass
@@ -24,7 +23,6 @@ def check_error(json):
     如果返回码提示有错误，抛出一个 :class:`ClientException` 异常。否则返回 True 。
     """
     if "errcode" in json and json["errcode"] != 0:
-        logger.error(json)
         raise ClientException("{}: {}".format(json["errcode"], json["errmsg"]))
     return json
 
@@ -101,7 +99,7 @@ class Client(object):
             self.token_expires_at = int(time.time()) + json["expires_in"]
             self._async_refresh_token(json["expires_in"])
 
-        t = Timer(timer_interval - 90, timer, self=self)
+        t = Timer(timer_interval - 90, timer, self)
         t.start()
 
     @property
